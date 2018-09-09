@@ -1,0 +1,17 @@
+version: '3.5'
+
+services:
+
+  backy2-api:
+    build: .
+    ports:
+      - 7070:7070
+    environment:
+      # - RESTIC_PASSWORD=123
+      - LOG_LEVEL=debug
+      - PRE_BACKUP_COMMAND=/pre-backup.sh
+      - POST_BACKUP_COMMAND=/post-backup.sh
+      - SOURCE_DATA_PATH=file:///backup-source/TESTFILE
+      - MONITOR_HOSTS=localhost
+      - CEPH_KEYRING_BASE64=YQ==
+      - PROTECT_YOUNG_BACKUP_DAYS=0
