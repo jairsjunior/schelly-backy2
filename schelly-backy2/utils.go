@@ -10,9 +10,16 @@ import (
 	"github.com/go-cmd/cmd"
 )
 
-func execShellTimeout(command string, timeout time.Duration) (string, error) {
+type ShellContext struct {
+	cmdRef *cmd.Cmd
+}
+
+func execShellTimeout(command string, timeout time.Duration, ctx *ShellContext) (string, error) {
 	acmd := cmd.NewCmd("bash", "-c", command)
 	statusChan := acmd.Start() // non-blocking
+	if ctx != nil {
+		ctx.cmdRef = acmd
+	}
 
 	//kill if taking too long
 	if timeout != 0 {
@@ -38,7 +45,7 @@ func execShellTimeout(command string, timeout time.Duration) (string, error) {
 }
 
 func execShell(command string) (string, error) {
-	return execShellTimeout(command, 0)
+	return execShellTimeout(command, 0, nil)
 }
 
 func getCmdOutput(cmd *cmd.Cmd) string {

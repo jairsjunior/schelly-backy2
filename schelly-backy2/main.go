@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/go-cmd/cmd"
 	"github.com/gorilla/mux"
 	"github.com/satori/go.uuid"
 )
@@ -39,9 +38,7 @@ type Response struct {
 
 var options = new(Options)
 var runningBackupAPIID = ""
-var backupPreCmd *cmd.Cmd
-var backupBacky2Cmd *cmd.Cmd
-var backupPostCmd *cmd.Cmd
+var currentBackupContext = ShellContext{}
 var createBackupChan = make(chan string)
 
 func main() {
@@ -186,6 +183,17 @@ func DeleteBackup(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
 
 	apiID := params["id"]
+
+	if runningBackupAPIID == apiID {
+		err := (*currentBackupContext.cmdRef).Stop()
+		if err != nil {
+			sendResponse(apiID, "running", "Couldn't cancel current running backup task. err="+err.Error(), -1, http.StatusInternalServerError, w)
+		} else {
+			sendResponse(apiID, "deleted", "Running backup task was cancelled", -1, http.StatusOK, w)
+		}
+		return
+	}
+
 	backyID, err0 := getBackyID(apiID)
 	if err0 != nil {
 		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
@@ -325,9 +333,10 @@ func handleBackupExecution() {
 
 		if options.preBackupCommand != "" {
 			logrus.Infof("Running pre-backup command '%s'", options.preBackupCommand)
-			out, err := execShellTimeout(options.preBackupCommand, time.Duration(options.maxTimeRunning)*time.Second)
+			out, err := execShellTimeout(options.preBackupCommand, time.Duration(options.maxTimeRunning)*time.Second, &currentBackupContext)
 			if err != nil {
 				logrus.Debugf("Pre-backup command error. out=%s; err=%s", out, err.Error())
+				runningBackupAPIID = ""
 				continue
 			} else {
 				logrus.Debug("Pre-backup command success")
@@ -335,9 +344,10 @@ func handleBackupExecution() {
 		}
 
 		logrus.Infof("Running Backy2 backup")
-		out, err := execShellTimeout("backy2 backup "+options.sourcePath+" "+options.sourcePath, time.Duration(options.maxTimeRunning)*time.Second)
+		out, err := execShellTimeout("backy2 backup "+options.sourcePath+" "+options.sourcePath, time.Duration(options.maxTimeRunning)*time.Second, &currentBackupContext)
 		if err != nil {
 			logrus.Debugf("Backy2 error. out=%s; err=%s", out, err.Error())
+			runningBackupAPIID = ""
 			continue
 		} else {
 			logrus.Debug("Backy2 backup success")
@@ -351,15 +361,17 @@ func handleBackupExecution() {
 			saveBackyID(runningBackupAPIID, backyID)
 		} else {
 			logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
+			runningBackupAPIID = ""
 			continue
 		}
 
 		//process post backup command after finished
 		if options.postBackupCommand != "" {
 			logrus.Infof("Running post-backup command '%s'", options.postBackupCommand)
-			out, err := execShellTimeout(options.postBackupCommand, time.Duration(options.maxTimeRunning)*time.Second)
+			out, err := execShellTimeout(options.postBackupCommand, time.Duration(options.maxTimeRunning)*time.Second, &currentBackupContext)
 			if err != nil {
 				logrus.Debugf("Post-backup command error. out=%s; err=%s", out, err.Error())
+				runningBackupAPIID = ""
 				continue
 			} else {
 				logrus.Debug("Post-backup command success")
