@@ -31,14 +31,18 @@ type Options struct {
 
 //Response schelly webhook response
 type Response struct {
-	ID      string `json:"id",omitempty`
-	Status  string `json:"status",omitempty`
-	Message string `json:"message",omitempty`
-	Size    int64  `json:"size",omitempty`
+	ID      string  `json:"id",omitempty`
+	Status  string  `json:"status",omitempty`
+	Message string  `json:"message",omitempty`
+	SizeMB  float64 `json:"size_mb",omitempty`
 }
 
 var options = new(Options)
 var runningBackupAPIID = ""
+var backupPreCmd *cmd.Cmd
+var backupBacky2Cmd *cmd.Cmd
+var backupPostCmd *cmd.Cmd
+var createBackupChan = make(chan string)
 
 func main() {
 	listenPort := flag.Int("listen-port", 7070, "REST API server listen port")
@@ -94,6 +98,11 @@ func main() {
 		logrus.Infof("Backy2 repo already exists and is accessible")
 	}
 
+	//process background backup tasks
+	go func() {
+		handleBackupExecution()
+	}()
+
 	router := mux.NewRouter()
 	router.HandleFunc("/backups", GetBackups).Methods("GET")
 	router.HandleFunc("/backups", CreateBackup).Methods("POST")
@@ -127,6 +136,12 @@ func GetBackup(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
 
 	apiID := params["id"]
+
+	if runningBackupAPIID == apiID {
+		sendResponse(apiID, "running", "backup is still running", -1, http.StatusOK, w)
+		return
+	}
+
 	backyID, err0 := getBackyID(apiID)
 	if err0 != nil {
 		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
@@ -145,7 +160,7 @@ func GetBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendResponse(res.ID, res.Status, res.Message, res.Size, http.StatusOK, w)
+	sendResponse(apiID, res.Status, res.Message, res.SizeMB, http.StatusOK, w)
 }
 
 //CreateBackup - trigger new backup on Backy2
@@ -158,102 +173,11 @@ func CreateBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiID := createAPIID()
-	logrus.Debugf("Created apiID %s", apiID)
+	runningBackupAPIID = createAPIID()
+	logrus.Debugf("Created apiID %s", runningBackupAPIID)
 
-	if options.preBackupCommand != "" {
-		logrus.Infof("Running pre-backup command '%s'", options.preBackupCommand)
-		result, err := execShell(options.preBackupCommand)
-		logrus.Debugf("Output: %s", result)
-		if err != nil {
-			logrus.Warnf("Failed to run pre-backup command: '%s'", result)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		logrus.Debug("Pre-backup command success")
-	}
-
-	logrus.Infof("Calling Backy2 to perform backup of %s...", options.sourcePath)
-	backyCmd := cmd.NewCmd("bash", "-c", "backy2 backup "+options.sourcePath+" "+options.sourcePath)
-	statusChan := backyCmd.Start() // non-blocking
-
-	//kill process if taking too long to finish
-	go func() {
-		<-time.After(time.Duration(options.maxTimeRunning) * time.Second)
-		backyCmd.Stop()
-	}()
-
-	//wait to see if backups finishes fast (< 5 seconds)
-	//return 'available' if so, else, return 'running' to http call (the user will have to call GET /backup/{id} later to check for status)
-	i := 0
-	for i < 20 {
-		time.Sleep(250 * time.Millisecond)
-		i = i + 1
-		if backyCmd.Status().Complete {
-			logrus.Debugf("Backup finished in %d ms", i*250)
-			break
-		}
-	}
-
-	status := backyCmd.Status()
-	out := strings.Join(status.Stdout, "\n")
-	out = out + "\n" + strings.Join(status.Stderr, "\n")
-
-	if status.Complete {
-		logrus.Debugf("Fast backup finish detected")
-		if status.Exit != 0 {
-			logrus.Errorf("Error detected while creating new backup in Backy2. err=%s", out)
-			http.Error(w, out, http.StatusInternalServerError)
-		} else {
-			rex, _ := regexp.Compile("New version\\: ([\\-a-z0-9]+) \\(Tags")
-			id := rex.FindStringSubmatch(out)
-			if len(id) == 2 && strings.Contains(out, "Backy complete") {
-				sendResponse(apiID, "available", out, -1, http.StatusCreated, w)
-				logrus.Infof("Backup success detected. Returning status 'available' in POST response")
-			} else {
-				logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
-				http.Error(w, "Couldn't find 'Backy complete' or id in command output", http.StatusInternalServerError)
-			}
-		}
-	} else {
-		logrus.Debugf("Backup will take some time. Returning status 'running'")
-		sendResponse(apiID, "running", out+" (...not finished yet)", -1, http.StatusCreated, w)
-	}
-
-	// Block waiting for command to exit, be stopped, or be killed
-	finalStatus := <-statusChan
-
-	//verify background process results
-	if finalStatus.Exit != 0 {
-		status := backyCmd.Status()
-		out := strings.Join(status.Stdout, "\n")
-		out = out + "\n" + strings.Join(status.Stderr, "\n")
-		logrus.Warnf("Backy2 backup failed. exit=%d. out=%s", finalStatus.Exit, out)
-	} else {
-		logrus.Infof("Backy2 backup finished successfuly")
-		rex, _ := regexp.Compile("New version\\: ([\\-a-z0-9]+) \\(Tags")
-		id := rex.FindStringSubmatch(out)
-		if len(id) == 2 && strings.Contains(out, "Backy complete") {
-			logrus.Infof("Backup success. backyID=%s, apiID=%s", id[1], apiID)
-			saveBackyID(apiID, id[1])
-		} else {
-			logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
-		}
-	}
-
-	//process post backup command after finished
-	if options.postBackupCommand != "" {
-		logrus.Infof("Running post-backup command '%s'...", options.postBackupCommand)
-		result, err := execShell(options.preBackupCommand)
-		logrus.Debugf("Output: %s", result)
-		if err != nil {
-			logrus.Warnf("Failed to run post-backup command: %s", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		logrus.Debug("Post-backup command success")
-	}
-
+	createBackupChan <- runningBackupAPIID
+	sendResponse(runningBackupAPIID, "running", "backup start running", -1, http.StatusAccepted, w)
 }
 
 //DeleteBackup - delete backup from Backy2
@@ -328,7 +252,7 @@ func findBackup(id string) (Response, error) {
 		status = "available"
 	}
 
-	size, err1 := strconv.ParseInt(id0[1], 10, 64)
+	size, err1 := strconv.ParseFloat(id0[1], 64)
 	if err1 != nil {
 		logrus.Warnf("Couldn't get size from Backy2 response. err=%s", err1)
 		size = -1
@@ -337,16 +261,16 @@ func findBackup(id string) (Response, error) {
 	return Response{
 		ID:     id,
 		Status: status,
-		Size:   size,
+		SizeMB: size / 1000000.0,
 	}, nil
 }
 
-func sendResponse(id string, status string, message string, size int64, httpStatus int, w http.ResponseWriter) {
+func sendResponse(id string, status string, message string, size float64, httpStatus int, w http.ResponseWriter) {
 	resp := Response{
 		ID:      id,
 		Status:  status,
 		Message: message,
-		Size:    size,
+		SizeMB:  size,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
@@ -391,4 +315,59 @@ func saveBackyID(apiID string, backyID string) error {
 		}
 	}
 	return ioutil.WriteFile(fn, []byte(backyID), 0644)
+}
+
+func handleBackupExecution() {
+	for true {
+		logrus.Debugf("Waiting next request to come...")
+		<-createBackupChan
+		logrus.Debugf("Backup request arrived")
+
+		if options.preBackupCommand != "" {
+			logrus.Infof("Running pre-backup command '%s'", options.preBackupCommand)
+			out, err := execShellTimeout(options.preBackupCommand, time.Duration(options.maxTimeRunning)*time.Second)
+			if err != nil {
+				logrus.Debugf("Pre-backup command error. out=%s; err=%s", out, err.Error())
+				continue
+			} else {
+				logrus.Debug("Pre-backup command success")
+			}
+		}
+
+		logrus.Infof("Running Backy2 backup")
+		out, err := execShellTimeout("backy2 backup "+options.sourcePath+" "+options.sourcePath, time.Duration(options.maxTimeRunning)*time.Second)
+		if err != nil {
+			logrus.Debugf("Backy2 error. out=%s; err=%s", out, err.Error())
+			continue
+		} else {
+			logrus.Debug("Backy2 backup success")
+		}
+
+		rex, _ := regexp.Compile("New version\\: ([\\-a-z0-9]+) \\(Tags")
+		id := rex.FindStringSubmatch(out)
+		if len(id) == 2 && strings.Contains(out, "Backy complete") {
+			backyID := id[1]
+			logrus.Infof("Backup success detected")
+			saveBackyID(runningBackupAPIID, backyID)
+		} else {
+			logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
+			continue
+		}
+
+		//process post backup command after finished
+		if options.postBackupCommand != "" {
+			logrus.Infof("Running post-backup command '%s'", options.postBackupCommand)
+			out, err := execShellTimeout(options.postBackupCommand, time.Duration(options.maxTimeRunning)*time.Second)
+			if err != nil {
+				logrus.Debugf("Post-backup command error. out=%s; err=%s", out, err.Error())
+				continue
+			} else {
+				logrus.Debug("Post-backup command success")
+			}
+		}
+		logrus.Infof("Backup finished")
+
+		//now we can accept another POST /backups call...
+		runningBackupAPIID = ""
+	}
 }
