@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -13,64 +11,17 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/gorilla/mux"
-	"github.com/satori/go.uuid"
+	"github.com/flaviostutz/schelly-webhook/schellyhook"
 )
 
-//Options command line options
-type Options struct {
-	listenPort        int
-	listenIP          string
-	sourcePath        string
-	repoDir           string
-	maxTimeRunning    int
-	preBackupCommand  string
-	postBackupCommand string
-}
+var sourcePath *string
 
-//Response schelly webhook response
-type Response struct {
-	ID      string  `json:"id",omitempty`
-	Status  string  `json:"status",omitempty`
-	Message string  `json:"message",omitempty`
-	SizeMB  float64 `json:"size_mb",omitempty`
+//Backy2Backuper sample backuper
+type Backy2Backuper struct {
 }
-
-var options = new(Options)
-var runningBackupAPIID = ""
-var currentBackupContext = ShellContext{}
-var createBackupChan = make(chan string)
 
 func main() {
-	listenPort := flag.Int("listen-port", 7070, "REST API server listen port")
-	listenIP := flag.String("listen-ip", "0.0.0.0", "REST API server listen ip address")
-	logLevel := flag.String("log-level", "info", "debug, info, warning or error")
-	sourcePath := flag.String("source-path", "file:///backup-source/backup-this", "Backup source path. rbd://<pool>/<imagename>[@<snapshotname>] OR file:///[dir]/[file]")
-	maxTimeRunning := flag.Int("max-backup-time-running", 7200, "Max time for a single backup to keep running in seconds. After that time the process will be killed")
-	preBackupCommand := flag.String("pre-backup-command", "", "Command to be executed before running the backup")
-	postBackupCommand := flag.String("post-backup-command", "", "Command to be executed after running the backup")
-	flag.Parse()
-
-	switch *logLevel {
-	case "debug":
-		logrus.SetLevel(logrus.DebugLevel)
-		break
-	case "warning":
-		logrus.SetLevel(logrus.WarnLevel)
-		break
-	case "error":
-		logrus.SetLevel(logrus.ErrorLevel)
-		break
-	default:
-		logrus.SetLevel(logrus.InfoLevel)
-	}
-
-	options.listenPort = *listenPort
-	options.listenIP = *listenIP
-	options.sourcePath = *sourcePath
-	options.maxTimeRunning = *maxTimeRunning
-	options.preBackupCommand = *preBackupCommand
-	options.postBackupCommand = *postBackupCommand
+	logrus.Info("====Starting Backy2 REST server====")
 
 	err := mkDirs("/var/lib/backy2/ids")
 	if err != nil {
@@ -78,13 +29,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	logrus.Info("====Starting Backy2 REST server====")
-
-	logrus.Debugf("Checking if Restic repo was already initialized")
-	result, err := execShell("backy2 ls")
+	logrus.Debugf("Checking if Backy2 repo was already initialized")
+	result, err := schellyhook.ExecShell("backy2 ls")
 	if err != nil {
 		logrus.Debugf("Couldn't access Backy2 repo. Trying to create it. err=%s", err)
-		info, err := execShell("backy2 initdb")
+		info, err := schellyhook.ExecShell("backy2 initdb")
 		if err != nil {
 			logrus.Debugf("Error creating Backy2 repo: %s %s", err, result)
 			os.Exit(1)
@@ -95,163 +44,162 @@ func main() {
 		logrus.Infof("Backy2 repo already exists and is accessible")
 	}
 
-	//process background backup tasks
-	go func() {
-		handleBackupExecution()
-	}()
+	backy2Backuper := Backy2Backuper{}
+	schellyhook.Initialize(backy2Backuper)
+}
 
-	router := mux.NewRouter()
-	router.HandleFunc("/backups", GetBackups).Methods("GET")
-	router.HandleFunc("/backups", CreateBackup).Methods("POST")
-	router.HandleFunc("/backups/{id}", GetBackup).Methods("GET")
-	router.HandleFunc("/backups/{id}", DeleteBackup).Methods("DELETE")
-	listen := fmt.Sprintf("%s:%d", options.listenIP, options.listenPort)
-	logrus.Infof("Listening at %s", listen)
-	err = http.ListenAndServe(listen, router)
+//Init register command line flags
+func (sb Backy2Backuper) Init() error {
+	sourcePath = flag.String("source-path", "file:///backup-source/backup-this", "Backup source path. rbd://<pool>/<imagename>[@<snapshotname>] OR file:///[dir]/[file]")
+	return nil
+}
+
+//CreateNewBackup creates a new backup
+func (sb Backy2Backuper) CreateNewBackup(apiID string, timeout time.Duration, shellContext *schellyhook.ShellContext) error {
+	logrus.Infof("CreateNewBackup() apiID=%s timeout=%d s", apiID, timeout.Seconds)
+
+	logrus.Infof("Running Backy2 backup")
+	out, err := schellyhook.ExecShellTimeout("backy2 backup "+*sourcePath+" "+*sourcePath, timeout, shellContext)
 	if err != nil {
-		logrus.Errorf("Error while listening requests: %s", err)
-		os.Exit(1)
-	}
-}
-
-//GetBackups - get backups from Backy
-func GetBackups(w http.ResponseWriter, r *http.Request) {
-	logrus.Debugf("GetBackups r=%s", r)
-	result, err := execShell("backy2 -m ls")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(result))
-	logrus.Debugf("result: %s", result)
-}
-
-//GetBackup - get specific backup from Backy
-func GetBackup(w http.ResponseWriter, r *http.Request) {
-	logrus.Debugf("GetBackup r=%s", r)
-	params := mux.Vars(r)
-
-	apiID := params["id"]
-
-	if runningBackupAPIID == apiID {
-		sendResponse(apiID, "running", "backup is still running", -1, http.StatusOK, w)
-		return
-	}
-
-	backyID, err0 := getBackyID(apiID)
-	if err0 != nil {
-		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
-		http.Error(w, fmt.Sprintf("Backup %s not found", apiID), http.StatusNotFound)
-		return
-	}
-
-	res, err := findBackup(backyID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if res.ID == "" {
-		http.Error(w, fmt.Sprintf("Backup %s not found", apiID), http.StatusNotFound)
-		return
-	}
-
-	sendResponse(apiID, res.Status, res.Message, res.SizeMB, http.StatusOK, w)
-}
-
-//CreateBackup - trigger new backup on Backy2
-func CreateBackup(w http.ResponseWriter, r *http.Request) {
-	logrus.Infof(">>>>CreateBackup r=%s", r)
-
-	if runningBackupAPIID != "" {
-		logrus.Infof("Another backup id %s is already running. Aborting.", runningBackupAPIID)
-		http.Error(w, fmt.Sprintf("Another backup id %s is already running. Aborting.", runningBackupAPIID), http.StatusConflict)
-		return
-	}
-
-	runningBackupAPIID = createAPIID()
-	logrus.Debugf("Created apiID %s", runningBackupAPIID)
-
-	createBackupChan <- runningBackupAPIID
-	sendResponse(runningBackupAPIID, "running", "backup start running", -1, http.StatusAccepted, w)
-}
-
-//DeleteBackup - delete backup from Backy2
-func DeleteBackup(w http.ResponseWriter, r *http.Request) {
-	logrus.Debugf("DeleteBackup r=%s", r)
-	params := mux.Vars(r)
-
-	apiID := params["id"]
-
-	if runningBackupAPIID == apiID {
-		err := (*currentBackupContext.cmdRef).Stop()
-		if err != nil {
-			sendResponse(apiID, "running", "Couldn't cancel current running backup task. err="+err.Error(), -1, http.StatusInternalServerError, w)
-		} else {
-			sendResponse(apiID, "deleted", "Running backup task was cancelled", -1, http.StatusOK, w)
+		status := (*shellContext).CmdRef.Status()
+		if status.Exit == -1 {
+			logrus.Warnf("Backy2 command timeout enforced (%d seconds)", (status.StopTs-status.StartTs)/1000000000)
 		}
-		return
+		logrus.Debugf("Backy2 error. out=%s; err=%s", out, err.Error())
+		return err
+	} else {
+		logrus.Debug("Backy2 backup success")
 	}
+
+	rex, _ := regexp.Compile("New version\\: ([\\-a-z0-9]+) \\(Tags")
+	id := rex.FindStringSubmatch(out)
+	if len(id) == 2 && strings.Contains(out, "Backy complete") {
+		backyID := id[1]
+		logrus.Infof("Backup success")
+		saveBackyID(apiID, backyID)
+	} else {
+		logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
+		return fmt.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
+	}
+
+	logrus.Infof("Backy2 backup finished")
+	return nil
+}
+
+//GetAllBackups returns all backups from underlaying backuper. optional for Schelly
+func (sb Backy2Backuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) {
+	logrus.Debugf("GetAllBackups")
+	result, err := schellyhook.ExecShell("backy2 -m ls")
+	if err != nil {
+		return nil, err
+	}
+
+	backups := make([]schellyhook.SchellyResponse, 0)
+	lines := strings.Split(result, "\n")
+	for i, line := range lines {
+		logrus.Infof(">>>>>>line=%s", line)
+		if i == 0 {
+			continue
+		}
+		cols := strings.Split(line, "|")
+
+		dataID := cols[6]
+		sizeMB, err := strconv.ParseFloat(cols[5], 64)
+		if err != nil {
+			return nil, err
+		}
+		sizeMB = sizeMB / 1000000.0
+		status := "running"
+		if cols[7] == "1" {
+			status = "available"
+		}
+
+		sr := schellyhook.SchellyResponse{
+			// ID:      getAPIID(dataID),
+			DataID:  dataID,
+			Status:  status,
+			Message: line,
+			SizeMB:  sizeMB,
+		}
+		backups = append(backups, sr)
+	}
+
+	return backups, nil
+}
+
+//GetBackup get an specific backup along with status
+func (sb Backy2Backuper) GetBackup(apiID string) (*schellyhook.SchellyResponse, error) {
+	logrus.Debugf("GetBackup apiID=%s", apiID)
 
 	backyID, err0 := getBackyID(apiID)
 	if err0 != nil {
 		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
-		http.Error(w, fmt.Sprintf("Backup %s not found", apiID), http.StatusNotFound)
-		return
+		return nil, nil
 	}
 
-	res, err0 := findBackup(backyID)
+	res, err := findBackup(apiID, backyID)
+	if err != nil {
+		return nil, nil
+	}
+
+	return res, nil
+}
+
+//DeleteBackup removes current backup from underlaying backup storage
+func (sb Backy2Backuper) DeleteBackup(apiID string) error {
+	logrus.Debugf("DeleteBackup apiID=%s", apiID)
+
+	backyID, err0 := getBackyID(apiID)
 	if err0 != nil {
-		logrus.Debugf("Backup %s not found for removal", params["id"])
-		http.Error(w, err0.Error(), http.StatusInternalServerError)
-		return
-	}
-	if res.ID == "" {
-		http.Error(w, fmt.Sprintf("Backup %s not found", params["id"]), http.StatusNotFound)
-		return
+		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
+		return err0
 	}
 
-	logrus.Debugf("Backup api=%s backy=%s found. Proceeding to deletion", apiID, backyID)
-	result, err := execShell("backy2 rm " + backyID)
+	_, err0 = findBackup(apiID, backyID)
+	if err0 != nil {
+		logrus.Debugf("Backup apiID %s, backyID %s not found for removal", apiID, backyID)
+		return err0
+	}
+
+	logrus.Debugf("Backup apiID=%s backyID=%s found. Proceeding to deletion", apiID, backyID)
+	result, err := schellyhook.ExecShell("backy2 rm " + backyID)
 	if err != nil {
 		if strings.Contains(err.Error(), "100") {
-			http.Error(w, "Cannot delete this backup because it is too young. Configure $PROTECT_YOUNG_BACKUP_DAYS if needed", http.StatusInternalServerError)
+			return fmt.Errorf("Cannot delete this backup because it is too young. Configure $PROTECT_YOUNG_BACKUP_DAYS if needed. err=%s", err)
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return err
 		}
-		return
 	}
 	logrus.Debugf("result: %s", result)
 
 	rex, _ := regexp.Compile("Removed backup version ([\\-a-z0-9]+) with")
 	id := rex.FindStringSubmatch(result)
 	if len(id) != 2 {
-		http.Error(w, "Couldn't find remove info from response", http.StatusInternalServerError)
-		return
+		logrus.Errorf("Couldn't find remove info from Backy2 response. out=%s", result)
+		return fmt.Errorf("Couldn't find remove info from Backy2 response. out=%s", result)
 	}
 
 	if id[1] != backyID {
 		logrus.Errorf("Returned id from delete is different from requested. %s != %s", id[1], backyID)
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("Returned id from delete is different from requested. %s != %s", id[1], backyID)
 	}
 
-	sendResponse(apiID, "deleted", result, -1, http.StatusOK, w)
+	logrus.Debugf("Delete apiID %s backyID %s successful", apiID, backyID)
+	return nil
 }
 
-func findBackup(id string) (Response, error) {
-	result, err := execShell("backy2 -m ls")
+func findBackup(apiID string, backyID string) (*schellyhook.SchellyResponse, error) {
+	result, err := schellyhook.ExecShell("backy2 -m ls")
 	if err != nil {
-		return Response{}, err
+		return nil, err
 	}
 	logrus.Debugf("Query snapshots result: %s", result)
 
-	rex, _ := regexp.Compile("\\|([0-9]+)\\|" + id + "\\|([0|1])")
+	rex, _ := regexp.Compile("\\|([0-9]+)\\|" + backyID + "\\|([0|1])")
 	id0 := rex.FindStringSubmatch(result)
 	if len(id0) != 3 {
 		logrus.Debug("Couldn't find backup id in response '%'", id0, result)
-		return Response{}, nil
+		return nil, nil
 	}
 
 	logrus.Debugf("Backup %s found", id0)
@@ -266,29 +214,12 @@ func findBackup(id string) (Response, error) {
 		size = -1
 	}
 
-	return Response{
-		ID:     id,
+	return &schellyhook.SchellyResponse{
+		ID:     apiID,
+		DataID: backyID,
 		Status: status,
 		SizeMB: size / 1000000.0,
 	}, nil
-}
-
-func sendResponse(id string, status string, message string, size float64, httpStatus int, w http.ResponseWriter) {
-	resp := Response{
-		ID:      id,
-		Status:  status,
-		Message: message,
-		SizeMB:  size,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(httpStatus)
-	err := json.NewEncoder(w).Encode(resp)
-	if err != nil {
-		logrus.Errorf("Error encoding response. err=%s", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	} else {
-		logrus.Debugf("Response sent %s", resp)
-	}
 }
 
 func getBackyID(apiID string) (string, error) {
@@ -308,11 +239,6 @@ func getBackyID(apiID string) (string, error) {
 	}
 }
 
-func createAPIID() string {
-	uuid, _ := uuid.NewV4()
-	return uuid.String()
-}
-
 func saveBackyID(apiID string, backyID string) error {
 	logrus.Debugf("Creating new ApiID for backyID %s", backyID)
 	fn := "/var/lib/backy2/ids/" + apiID
@@ -325,61 +251,9 @@ func saveBackyID(apiID string, backyID string) error {
 	return ioutil.WriteFile(fn, []byte(backyID), 0644)
 }
 
-func handleBackupExecution() {
-	for true {
-		logrus.Debugf("Waiting next request to come...")
-		<-createBackupChan
-		logrus.Debugf("Backup request arrived")
-
-		if options.preBackupCommand != "" {
-			logrus.Infof("Running pre-backup command '%s'", options.preBackupCommand)
-			out, err := execShellTimeout(options.preBackupCommand, time.Duration(options.maxTimeRunning)*time.Second, &currentBackupContext)
-			if err != nil {
-				logrus.Debugf("Pre-backup command error. out=%s; err=%s", out, err.Error())
-				runningBackupAPIID = ""
-				continue
-			} else {
-				logrus.Debug("Pre-backup command success")
-			}
-		}
-
-		logrus.Infof("Running Backy2 backup")
-		out, err := execShellTimeout("backy2 backup "+options.sourcePath+" "+options.sourcePath, time.Duration(options.maxTimeRunning)*time.Second, &currentBackupContext)
-		if err != nil {
-			logrus.Debugf("Backy2 error. out=%s; err=%s", out, err.Error())
-			runningBackupAPIID = ""
-			continue
-		} else {
-			logrus.Debug("Backy2 backup success")
-		}
-
-		rex, _ := regexp.Compile("New version\\: ([\\-a-z0-9]+) \\(Tags")
-		id := rex.FindStringSubmatch(out)
-		if len(id) == 2 && strings.Contains(out, "Backy complete") {
-			backyID := id[1]
-			logrus.Infof("Backup success detected")
-			saveBackyID(runningBackupAPIID, backyID)
-		} else {
-			logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
-			runningBackupAPIID = ""
-			continue
-		}
-
-		//process post backup command after finished
-		if options.postBackupCommand != "" {
-			logrus.Infof("Running post-backup command '%s'", options.postBackupCommand)
-			out, err := execShellTimeout(options.postBackupCommand, time.Duration(options.maxTimeRunning)*time.Second, &currentBackupContext)
-			if err != nil {
-				logrus.Debugf("Post-backup command error. out=%s; err=%s", out, err.Error())
-				runningBackupAPIID = ""
-				continue
-			} else {
-				logrus.Debug("Post-backup command success")
-			}
-		}
-		logrus.Infof("Backup finished")
-
-		//now we can accept another POST /backups call...
-		runningBackupAPIID = ""
+func mkDirs(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return os.MkdirAll(path, os.ModePerm)
 	}
+	return nil
 }

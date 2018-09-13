@@ -21,7 +21,7 @@ schelly-backy2 \
     --listen-port=$LISTEN_PORT \
     --log-level=$LOG_LEVEL \
     --source-path=$SOURCE_DATA_PATH \
-    --max-backup-time-running=$MAX_BACKUP_TIME_RUNNING_SECONDS \
+    --pre-post-timeout=$PRE_POST_TIMEOUT \
     --pre-backup-command=$PRE_BACKUP_COMMAND \
     --post-backup-command=$POST_BACKUP_COMMAND
 

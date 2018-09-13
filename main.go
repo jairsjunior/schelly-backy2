@@ -12,9 +12,9 @@ import (
 	_ "strings"
 
 	_ "github.com/Sirupsen/logrus"
+	_ "github.com/flaviostutz/schelly-webhook/schellyhook"
 	_ "github.com/go-cmd/cmd"
 	_ "github.com/gorilla/mux"
-	_ "github.com/satori/go.uuid"
 )
 
 func main() {
