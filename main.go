@@ -6,7 +6,6 @@ import (
 	_ "fmt"
 	_ "io/ioutil"
 	"log"
-	_ "net/http"
 	_ "os"
 	_ "regexp"
 	_ "strings"

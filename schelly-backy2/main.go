@@ -97,11 +97,10 @@ func (sb Backy2Backuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 	backups := make([]schellyhook.SchellyResponse, 0)
 	lines := strings.Split(result, "\n")
 	for i, line := range lines {
-		logrus.Infof(">>>>>>line=%s", line)
-		if i == 0 {
+		cols := strings.Split(line, "|")
+		if i == 0 || len(cols) < 7 {
 			continue
 		}
-		cols := strings.Split(line, "|")
 
 		dataID := cols[6]
 		sizeMB, err := strconv.ParseFloat(cols[5], 64)
@@ -193,7 +192,6 @@ func findBackup(apiID string, backyID string) (*schellyhook.SchellyResponse, err
 	if err != nil {
 		return nil, err
 	}
-	logrus.Debugf("Query snapshots result: %s", result)
 
 	rex, _ := regexp.Compile("\\|([0-9]+)\\|" + backyID + "\\|([0|1])")
 	id0 := rex.FindStringSubmatch(result)
@@ -231,7 +229,7 @@ func getBackyID(apiID string) (string, error) {
 			return "", err0
 		} else {
 			backyID := string(data)
-			logrus.Debugf("apiID %s -> backyID %s", apiID, backyID)
+			logrus.Debugf("apiID %s <-> backyID %s", apiID, backyID)
 			return backyID, nil
 		}
 	} else {
@@ -240,7 +238,7 @@ func getBackyID(apiID string) (string, error) {
 }
 
 func saveBackyID(apiID string, backyID string) error {
-	logrus.Debugf("Creating new ApiID for backyID %s", backyID)
+	logrus.Debugf("Setting apiID %s <-> backyID %s", apiID, backyID)
 	fn := "/var/lib/backy2/ids/" + apiID
 	if _, err := os.Stat(fn); err == nil {
 		err = os.Remove(fn)
