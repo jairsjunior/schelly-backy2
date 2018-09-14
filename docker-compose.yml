@@ -8,8 +8,8 @@ services:
       - 7070:7070
     environment:
       - LOG_LEVEL=debug
-      - PRE_BACKUP_COMMAND=/pre-backup.sh
-      - POST_BACKUP_COMMAND=/post-backup.sh
+      - PRE_BACKUP_COMMAND=dd if=/dev/zero of=/backup-source/TESTFILE bs=100MB count=2
+      - POST_BACKUP_COMMAND=rm /backup-source/TESTFILE
       - SOURCE_DATA_PATH=file:///backup-source/TESTFILE
       - MONITOR_HOSTS=localhost
       - CEPH_KEYRING_BASE64=YQ==

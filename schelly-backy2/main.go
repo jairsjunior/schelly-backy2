@@ -23,6 +23,22 @@ type Backy2Backuper struct {
 func main() {
 	logrus.Info("====Starting Backy2 REST server====")
 
+	backy2Backuper := Backy2Backuper{}
+	err := schellyhook.Initialize(backy2Backuper)
+	if err != nil {
+		logrus.Errorf("Error initializating Schellyhook. err=%s", err)
+		os.Exit(1)
+	}
+}
+
+//RegisterFlags register command line flags
+func (sb Backy2Backuper) RegisterFlags() error {
+	sourcePath = flag.String("source-path", "file:///backup-source/backup-this", "Backup source path. rbd://<pool>/<imagename>[@<snapshotname>] OR file:///[dir]/[file]")
+	return nil
+}
+
+//Init create repo
+func (sb Backy2Backuper) Init() error {
 	err := mkDirs("/var/lib/backy2/ids")
 	if err != nil {
 		logrus.Errorf("Couldn't create id references dir at /var/lib/backy2/ids. err=%s", err)
@@ -36,21 +52,13 @@ func main() {
 		info, err := schellyhook.ExecShell("backy2 initdb")
 		if err != nil {
 			logrus.Debugf("Error creating Backy2 repo: %s %s", err, result)
-			os.Exit(1)
+			return err
 		} else {
 			logrus.Infof("Backy2 repo created successfuly. info=%s", info)
 		}
 	} else {
 		logrus.Infof("Backy2 repo already exists and is accessible")
 	}
-
-	backy2Backuper := Backy2Backuper{}
-	schellyhook.Initialize(backy2Backuper)
-}
-
-//Init register command line flags
-func (sb Backy2Backuper) Init() error {
-	sourcePath = flag.String("source-path", "file:///backup-source/backup-this", "Backup source path. rbd://<pool>/<imagename>[@<snapshotname>] OR file:///[dir]/[file]")
 	return nil
 }
 
@@ -76,7 +84,7 @@ func (sb Backy2Backuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 	if len(id) == 2 && strings.Contains(out, "Backy complete") {
 		backyID := id[1]
 		logrus.Infof("Backup success")
-		saveBackyID(apiID, backyID)
+		saveDataID(apiID, backyID)
 	} else {
 		logrus.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
 		return fmt.Errorf("Couldn't find 'Backy complete' or id in command output. out=%s", out)
@@ -130,7 +138,7 @@ func (sb Backy2Backuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 func (sb Backy2Backuper) GetBackup(apiID string) (*schellyhook.SchellyResponse, error) {
 	logrus.Debugf("GetBackup apiID=%s", apiID)
 
-	backyID, err0 := getBackyID(apiID)
+	backyID, err0 := getDataID(apiID)
 	if err0 != nil {
 		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
 		return nil, nil
@@ -148,7 +156,7 @@ func (sb Backy2Backuper) GetBackup(apiID string) (*schellyhook.SchellyResponse, 
 func (sb Backy2Backuper) DeleteBackup(apiID string) error {
 	logrus.Debugf("DeleteBackup apiID=%s", apiID)
 
-	backyID, err0 := getBackyID(apiID)
+	backyID, err0 := getDataID(apiID)
 	if err0 != nil {
 		logrus.Debugf("BackyID not found for apiId %s. err=%s", apiID, err0)
 		return err0
@@ -220,7 +228,7 @@ func findBackup(apiID string, backyID string) (*schellyhook.SchellyResponse, err
 	}, nil
 }
 
-func getBackyID(apiID string) (string, error) {
+func getDataID(apiID string) (string, error) {
 	fn := "/var/lib/backy2/ids/" + apiID
 	if _, err := os.Stat(fn); err == nil {
 		logrus.Debugf("Found api id reference for %s", apiID)
@@ -237,7 +245,7 @@ func getBackyID(apiID string) (string, error) {
 	}
 }
 
-func saveBackyID(apiID string, backyID string) error {
+func saveDataID(apiID string, backyID string) error {
 	logrus.Debugf("Setting apiID %s <-> backyID %s", apiID, backyID)
 	fn := "/var/lib/backy2/ids/" + apiID
 	if _, err := os.Stat(fn); err == nil {

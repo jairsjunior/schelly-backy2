@@ -57,8 +57,6 @@ RUN touch /var/log/backy.log
 
 COPY --from=BUILD /go/bin/* /bin/
 ADD startup.sh /
-ADD pre-backup.sh /
-ADD post-backup.sh /
 ADD backy.cfg.template /
 
 CMD [ "/startup.sh" ]
