@@ -42,7 +42,7 @@ func (sb Backy2Backuper) Init() error {
 	err := mkDirs("/var/lib/backy2/ids")
 	if err != nil {
 		logrus.Errorf("Couldn't create id references dir at /var/lib/backy2/ids. err=%s", err)
-		os.Exit(1)
+		return err
 	}
 
 	logrus.Debugf("Checking if Backy2 repo was already initialized")

@@ -17,5 +17,5 @@ import (
 )
 
 func main() {
-	log.Print("Should not start this class")
+	log.Print("Should not start this class.")
 }
