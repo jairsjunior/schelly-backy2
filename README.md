@@ -1,6 +1,8 @@
 # schelly-restic
 This exposes the common functions of Backy2 with Schelly REST APIs so that it can be used as a backup backend for Schelly (backup scheduler), or standalone with curl, if you wish.
 
+REST API can be found at https://github.com/flaviostutz/schelly#webhook-spec
+
 Backy2 is a great tool for creating Ceph image backups. For more, visit http://backy2.com/docs/
 
 See more at http://github.com/flaviostutz/schelly
