@@ -41,7 +41,7 @@ type: backy2.meta_backends.sql
 #   sqlite:////path/to/sqlitefile
 #   postgresql:///database
 #   postgresql://user:password@host:port/database
-engine: sqlite:////var/lib/backy2/backy.sqlite
+engine: ${INDEX_DB_ADDRESS}
 
 
 [DataBackend]
@@ -49,7 +49,7 @@ engine: sqlite:////var/lib/backy2/backy.sqlite
 # Available types:
 #   backy2.data_backends.file
 #   backy2.data_backends.s3
-
+#   backy2.data_backends.azureblob
 
 type: backy2.data_backends.${TARGET_DATA_BACKEND}
 
@@ -64,6 +64,33 @@ path: /var/lib/backy2/data
 
 # How many writes to perform in parallel. This is useful if your backup space
 # can perform parallel writes faster than serial ones.
+# simultaneous_writes: ${SIMULTANEOUS_WRITES}
+
+# How many reads to perform in parallel. This is useful if your backup space
+# can perform parallel reads faster than serial ones.
+# simultaneous_reads: ${SIMULTANEOUS_READS}
+
+# Bandwidth throttling (set to 0 to disable, i.e. use full bandwidth)
+# bytes per second
+# bandwidth_read: ${MAX_BANDWIDTH_READ}
+# bandwidth_write: ${MAX_BANDWIDTH_WRITE}
+
+
+#######################################
+# backy2.data_backends.azureblob
+#######################################
+# type: backy2.data_backends.azureblob
+
+# Your azure blob access key
+azure_access_key_id: ${AZURE_ACCESS_KEY_ID}
+
+# Your azure blob secret access key
+azure_secret_access_key: ${AZURE_SECRET_ACCESS_KEY}
+
+# Store to this container name:
+bucket_name: ${AZURE_BUCKET_NAME}
+
+# How many azure blob puts to perform in parallel
 simultaneous_writes: ${SIMULTANEOUS_WRITES}
 
 # How many reads to perform in parallel. This is useful if your backup space
@@ -75,40 +102,42 @@ simultaneous_reads: ${SIMULTANEOUS_READS}
 bandwidth_read: ${MAX_BANDWIDTH_READ}
 bandwidth_write: ${MAX_BANDWIDTH_WRITE}
 
+
 #######################################
 # backy2.data_backends.s3
 #######################################
 #type: backy2.data_backends.s3
 
 # Your s3 access key
-aws_access_key_id: ${S3_AWS_ACCESS_KEY_ID}
+# aws_access_key_id: ${S3_AWS_ACCESS_KEY_ID}
 
 # Your s3 secret access key
-aws_secret_access_key: ${S3_AWS_SECRET_ACCESS_KEY}
+# aws_secret_access_key: ${S3_AWS_SECRET_ACCESS_KEY}
 
 # Your aws host (IP or name)
-host: ${S3_AWS_HOST}
+# host: ${S3_AWS_HOST}
+# host: s3proxy
 
 # The port to connect to (usually 80 if not secure or 443 if secure)
-port: ${S3_AWS_PORT}
+# port: ${S3_AWS_PORT}
 
 # Use HTTPS?
-is_secure: ${S3_AWS_HTTPS}
+# is_secure: ${S3_AWS_HTTPS}
 
 # Store to this bucket name:
-bucket_name: ${S3_AWS_BUCKET_NAME}
+# bucket_name: ${S3_AWS_BUCKET_NAME}
 
 # How many s3 puts to perform in parallel
-#simultaneous_writes: 5
+# simultaneous_writes: 5
 
 # How many reads to perform in parallel. This is useful if your backup space
 # can perform parallel reads faster than serial ones.
-#simultaneous_reads: 5
+# simultaneous_reads: 5
 
 # Bandwidth throttling (set to 0 to disable, i.e. use full bandwidth)
 # bytes per second
-#bandwidth_read: 78643200
-#bandwidth_write: 78643200
+# bandwidth_read: 78643200
+# bandwidth_write: 78643200
 
 
 [NBD]

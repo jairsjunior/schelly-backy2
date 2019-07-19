@@ -3,14 +3,42 @@ version: '3.5'
 services:
 
   backy2-api:
+    image: jairsjunior/ceph-backy2
     build: .
     ports:
       - 7070:7070
     environment:
       - LOG_LEVEL=debug
-      - PRE_BACKUP_COMMAND=dd if=/dev/zero of=/backup-source/TESTFILE bs=100MB count=2
-      - POST_BACKUP_COMMAND=rm /backup-source/TESTFILE
-      - SOURCE_DATA_PATH=file:///backup-source/TESTFILE
-      - MONITOR_HOSTS=localhost
-      - CEPH_KEYRING_BASE64=YQ==
+      # - PRE_BACKUP_COMMAND=dd if=/dev/zero of=/backup-source/TESTFILE bs=100MB count=2
+      # - POST_BACKUP_COMMAND=rm /backup-source/TESTFILE
+      - PRE_BACKUP_COMMAND=rbd snap create volumes/imagetest-3@backup
+      - POST_BACKUP_COMMAND=rbd snap rm volumes/imagetest-3@backup
+      - SOURCE_DATA_PATH=rbd://volumes/imagetest-3@backup
+      - MONITOR_HOSTS=${HOST_IP}:6789
+      - ETCD_URL=http://${HOST_IP}:12379
       - PROTECT_YOUNG_BACKUP_DAYS=0
+      # - INDEX_DB_ADDRESS=sqlite:////var/lib/backy2/backy.sqlite
+      - INDEX_DB_ADDRESS=postgres://postgres:postgres@172.20.10.3:5000/backy2
+      # - TARGET_DATA_BACKEND=azureblob
+      - TARGET_DATA_BACKEND=file
+      # - S3_AWS_HTTPS=false
+      # - S3_AWS_HOST=s3proxy
+      # - S3_AWS_PORT=80
+      # - S3_AWS_ACCESS_KEY_ID=local-identity
+      # - S3_AWS_SECRET_ACCESS_KEY=local-credential
+      # - S3_AWS_BUCKET_NAME=ceph-backy2-test
+      - AZURE_ACCESS_KEY_ID=local-identity
+      - AZURE_SECRET_ACCESS_KEY=local-credential
+      - AZURE_BUCKET_NAME=ceph-backy2-test
+    network_mode: host
+    pid: host
+    privileged: true
+    volumes:
+      - /mnt:/mnt
+      - /dev:/dev
+      - /sys:/sys
+      - /lib:/lib
+
+  
+  
+  

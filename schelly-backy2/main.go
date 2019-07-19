@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/flaviostutz/schelly-webhook/schellyhook"
+	"github.com/sirupsen/logrus"
 )
 
 var sourcePath *string

@@ -2,10 +2,39 @@
 set +e
 # set +x
 
-echo "Preparing Backy2..."
-if [ -f /var/lib/backy2/backy.sqlite ]; then
-    echo "Initializing Backy DB..."
+# echo "Check S3proxy is up"
+# while [ "$(nc -z $S3_AWS_HOST $S3_AWS_PORT </dev/null; echo $?)" !=  "0" ];
+# do sleep 5;
+# echo "Waiting for S3proxy is UP and RESPONDING";
+# done
+# sleep 15;
+
+if [[ $INDEX_DB_ADDRESS = *postgres* ]]
+then
+    [[ $INDEX_DB_ADDRESS =~ :\/\/(.*):(.*)@(.*):([0-9]*)\/?(.*) ]]
+    echo "Check Postgres is up"
+    echo "POSTGRES_HOST: ${BASH_REMATCH[3]}"
+    echo "POSTGRES_PORT: ${BASH_REMATCH[4]}"
+    while [ "$(nc -w 5 -z ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} </dev/null; echo $?)" !=  "0" ];
+    do sleep 5;
+        echo "Waiting for Postgres is UP and RESPONDING";
+    done
+    sleep 5;
+fi
+
+# echo "Preparing Backy2..."
+# if [ -f /var/lib/backy2/backy.sqlite ]; then
+#     echo "Initializing Backy DB..."
+#     backy2 initdb
+# fi
+
+BACKY2LS=$(backy2 ls)
+if [[ $BACKY2LS = *"Please run initdb first"* ]]
+then
+    echo "== Initializing Backy DB =="
     backy2 initdb
+else
+    echo "== Backy2 DB is inited! =="
 fi
 
 cat /backy.cfg.template | envsubst > /etc/backy.cfg

@@ -1,0 +1,15 @@
+version: '3.5'
+
+services:
+  myimage:
+    image: ubuntu
+    command: "echo -n 'Hello ' >> /mnt/foo/hello"    
+    volumes:
+      - image-test:/mnt/foo
+
+volumes:
+  image-test:
+    driver: cepher:latest
+    driver_opts:
+        size: 40
+    name: volumes/imagetest-3
